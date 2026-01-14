@@ -92,7 +92,7 @@ export function Heading({ element }: ComponentRenderProps) {
     level?: string | null;
   };
 
-  const Tag = (level || 'h2') as keyof JSX.IntrinsicElements;
+  const Tag = (level || 'h2') as keyof React.JSX.IntrinsicElements;
   const sizes: Record<string, string> = {
     h1: '28px',
     h2: '24px',

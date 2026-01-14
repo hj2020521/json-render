@@ -1,21 +1,12 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import { Renderer, useUIStream, JSONUIProvider } from "@json-render/react";
+import type { UITree } from "@json-render/core";
 import { CodeBlock } from "./code-block";
+import { demoRegistry, fallbackComponent, useInteractiveState } from "./demo/index";
 
 const SIMULATION_PROMPT = "Create a contact form with name, email, and message";
-
-interface UIElement {
-  key: string;
-  type: string;
-  props: Record<string, unknown>;
-  children?: string[];
-}
-
-interface UITree {
-  root: string;
-  elements: Record<string, UIElement>;
-}
 
 interface SimulationStage {
   tree: UITree;
@@ -45,69 +36,26 @@ const SIMULATION_STAGES: SimulationStage[] = [
   },
 ];
 
-const CODE_EXAMPLE = `import { createCatalog } from '@json-render/core';
-import { z } from 'zod';
+const CODE_EXAMPLE = `import { Renderer, useUIStream } from '@json-render/react';
+import { registry } from './registry';
 
-export const catalog = createCatalog({
-  components: {
-    Form: {
-      props: z.object({
-        title: z.string(),
-      }),
-      hasChildren: true,
-    },
-    Input: {
-      props: z.object({
-        label: z.string(),
-        name: z.string(),
-      }),
-    },
-    Textarea: {
-      props: z.object({
-        label: z.string(),
-        name: z.string(),
-      }),
-    },
-    Button: {
-      props: z.object({
-        label: z.string(),
-        action: z.string(),
-      }),
-    },
-  },
-});`;
+function App() {
+  const { tree, isStreaming, send } = useUIStream({
+    api: '/api/generate',
+  });
+
+  return (
+    <Renderer
+      tree={tree}
+      registry={registry}
+      loading={isStreaming}
+    />
+  );
+}`;
 
 type Mode = "simulation" | "interactive";
 type Phase = "typing" | "streaming" | "complete";
 type Tab = "stream" | "json" | "code";
-
-function parsePatch(line: string): { op: string; path: string; value: unknown } | null {
-  try {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("//")) return null;
-    return JSON.parse(trimmed);
-  } catch {
-    return null;
-  }
-}
-
-function applyPatch(tree: UITree, patch: { op: string; path: string; value: unknown }): UITree {
-  const newTree = { ...tree, elements: { ...tree.elements } };
-
-  if (patch.path === "/root") {
-    newTree.root = patch.value as string;
-    return newTree;
-  }
-
-  if (patch.path.startsWith("/elements/")) {
-    const key = patch.path.slice("/elements/".length).split("/")[0];
-    if (key && (patch.op === "set" || patch.op === "add")) {
-      newTree.elements[key] = patch.value as UIElement;
-    }
-  }
-
-  return newTree;
-}
 
 export function Demo() {
   const [mode, setMode] = useState<Mode>("simulation");
@@ -118,25 +66,36 @@ export function Demo() {
   const [streamLines, setStreamLines] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<Tab>("json");
   const [actionFired, setActionFired] = useState(false);
-  const [tree, setTree] = useState<UITree | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [openSelect, setOpenSelect] = useState<string | null>(null);
-  const [selectValues, setSelectValues] = useState<Record<string, string>>({});
-  const abortRef = useRef<AbortController | null>(null);
+  const [simulationTree, setSimulationTree] = useState<UITree | null>(null);
+
+  // Use the library's useUIStream hook for real API calls
+  const {
+    tree: apiTree,
+    isStreaming,
+    send,
+    clear,
+  } = useUIStream({
+    api: "/api/generate",
+    onError: (err: Error) => console.error("Generation error:", err),
+  } as Parameters<typeof useUIStream>[0]);
+
+  // Initialize interactive state for Select components
+  useInteractiveState();
 
   const currentSimulationStage = stageIndex >= 0 ? SIMULATION_STAGES[stageIndex] : null;
 
+  // Determine which tree to display
+  const currentTree = mode === "simulation" ? (currentSimulationStage?.tree || simulationTree) : apiTree;
+
   const stopGeneration = useCallback(() => {
-    abortRef.current?.abort();
     if (mode === "simulation") {
-      // Skip to interactive mode
       setMode("interactive");
       setPhase("complete");
       setTypedPrompt(SIMULATION_PROMPT);
       setUserPrompt("");
     }
-    setIsLoading(false);
-  }, [mode]);
+    clear();
+  }, [mode, clear]);
 
   // Typing effect for simulation
   useEffect(() => {
@@ -167,7 +126,7 @@ export function Demo() {
         if (stage) {
           setStageIndex(i);
           setStreamLines((prev) => [...prev, stage.stream]);
-          setTree(stage.tree);
+          setSimulationTree(stage.tree);
         }
         i++;
       } else {
@@ -183,330 +142,45 @@ export function Demo() {
     return () => clearInterval(interval);
   }, [mode, phase]);
 
-  const handleSubmit = useCallback(async () => {
-    if (!userPrompt.trim() || isLoading) return;
-
-    abortRef.current?.abort();
-    abortRef.current = new AbortController();
-
-    setIsLoading(true);
-    setStreamLines([]);
-    setTree({ root: "", elements: {} });
-
-    try {
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: userPrompt }),
-        signal: abortRef.current.signal,
-      });
-
-      if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response body");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let currentTree: UITree = { root: "", elements: {} };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          const patch = parsePatch(line);
-          if (patch) {
-            currentTree = applyPatch(currentTree, patch);
-            setTree({ ...currentTree });
-            setStreamLines((prev) => [...prev, line.trim()]);
+  // Track stream lines from real API
+  useEffect(() => {
+    if (mode === "interactive" && apiTree) {
+      // Convert tree to stream line for display
+      const streamLine = JSON.stringify({ tree: apiTree });
+      if (!streamLines.includes(streamLine) && Object.keys(apiTree.elements).length > 0) {
+        setStreamLines((prev) => {
+          const lastLine = prev[prev.length - 1];
+          if (lastLine !== streamLine) {
+            return [...prev, streamLine];
           }
-        }
+          return prev;
+        });
       }
-
-      if (buffer.trim()) {
-        const patch = parsePatch(buffer);
-        if (patch) {
-          currentTree = applyPatch(currentTree, patch);
-          setTree({ ...currentTree });
-          setStreamLines((prev) => [...prev, buffer.trim()]);
-        }
-      }
-    } catch (err) {
-      if ((err as Error).name !== "AbortError") {
-        console.error("Generation error:", err);
-      }
-    } finally {
-      setIsLoading(false);
     }
-  }, [userPrompt, isLoading]);
+  }, [mode, apiTree, streamLines]);
 
-  const handleAction = () => {
-    setActionFired(true);
-    setTimeout(() => setActionFired(false), 2000);
-  };
+  const handleSubmit = useCallback(async () => {
+    if (!userPrompt.trim() || isStreaming) return;
+    setStreamLines([]);
+    await send(userPrompt);
+  }, [userPrompt, isStreaming, send]);
 
-  // Render a single element
-  const renderElement = (element: UIElement, elements: Record<string, UIElement>): React.ReactNode => {
-    const { type, props, children: childKeys = [] } = element;
-    const renderChildren = () => childKeys.map((key) => {
-      const child = elements[key];
-      return child ? renderElement(child, elements) : null;
-    });
+  // Expose action handler for registry components
+  useEffect(() => {
+    (window as unknown as { __demoAction?: () => void }).__demoAction = () => {
+      setActionFired(true);
+      setTimeout(() => setActionFired(false), 2000);
+    };
+    return () => {
+      delete (window as unknown as { __demoAction?: () => void }).__demoAction;
+    };
+  }, []);
 
-    const customClass = Array.isArray(props.className) ? (props.className as string[]).join(" ") : "";
-    const baseClass = "animate-in fade-in slide-in-from-bottom-1 duration-200";
-
-    switch (type) {
-      // Layout
-      case "Card":
-        const maxWidthClass = props.maxWidth === "sm" ? "max-w-xs sm:min-w-[280px]" : props.maxWidth === "md" ? "max-w-sm sm:min-w-[320px]" : props.maxWidth === "lg" ? "max-w-md sm:min-w-[360px]" : "w-full";
-        const centeredClass = props.centered ? "mx-auto" : "";
-        return (
-          <div key={element.key} className={`border border-border rounded-lg p-3 bg-background overflow-hidden ${maxWidthClass} ${centeredClass} ${baseClass} ${customClass}`}>
-            {props.title ? <div className="font-semibold text-sm mb-1 text-left">{props.title as string}</div> : null}
-            {props.description ? <div className="text-[10px] text-muted-foreground mb-2 text-left">{props.description as string}</div> : null}
-            <div className="space-y-2">{renderChildren()}</div>
-          </div>
-        );
-      case "Stack":
-        const isHorizontal = props.direction === "horizontal";
-        const stackGap = props.gap === "lg" ? "gap-3" : props.gap === "sm" ? "gap-1" : "gap-2";
-        return (
-          <div key={element.key} className={`flex ${isHorizontal ? "flex-row flex-wrap items-center" : "flex-col"} ${stackGap} ${baseClass} ${customClass}`}>
-            {renderChildren()}
-          </div>
-        );
-      case "Grid":
-        const hasCustomCols = customClass.includes("grid-cols-");
-        const cols = hasCustomCols ? "" : (props.columns === 4 ? "grid-cols-4" : props.columns === 3 ? "grid-cols-3" : props.columns === 2 ? "grid-cols-2" : "grid-cols-1");
-        const gridGap = props.gap === "lg" ? "gap-3" : props.gap === "sm" ? "gap-1" : "gap-2";
-        return (
-          <div key={element.key} className={`grid ${cols} ${gridGap} ${baseClass} ${customClass}`}>
-            {renderChildren()}
-          </div>
-        );
-      case "Divider":
-        return <hr key={element.key} className={`border-border my-2 ${baseClass} ${customClass}`} />;
-
-      // Form Inputs
-      case "Input":
-        return (
-          <div key={element.key} className={`${baseClass} ${customClass}`}>
-            {props.label ? <label className="text-[10px] text-muted-foreground block mb-0.5 text-left">{props.label as string}</label> : null}
-            <input
-              type={(props.type as string) || "text"}
-              placeholder={props.placeholder as string || ""}
-              className="h-7 w-full bg-card border border-border rounded px-2 text-xs focus:outline-none focus:ring-1 focus:ring-foreground/20"
-            />
-          </div>
-        );
-      case "Textarea":
-        const rows = (props.rows as number) || 3;
-        return (
-          <div key={element.key} className={`${baseClass} ${customClass}`}>
-            {props.label ? <label className="text-[10px] text-muted-foreground block mb-0.5 text-left">{props.label as string}</label> : null}
-            <textarea
-              placeholder={props.placeholder as string || ""}
-              rows={rows}
-              className="w-full bg-card border border-border rounded px-2 py-1 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-foreground/20"
-            />
-          </div>
-        );
-      case "Select":
-        const selectOptions = (props.options as string[]) || [];
-        const selectedValue = selectValues[element.key];
-        const isOpen = openSelect === element.key;
-        return (
-          <div key={element.key} className={`relative ${baseClass} ${customClass}`}>
-            {props.label ? <label className="text-[10px] text-muted-foreground block mb-0.5 text-left">{props.label as string}</label> : null}
-            <div
-              onClick={() => setOpenSelect(isOpen ? null : element.key)}
-              className="h-7 w-full bg-card border border-border rounded px-2 text-xs flex items-center justify-between cursor-pointer hover:border-foreground/30 transition-colors"
-            >
-              <span className={selectedValue ? "text-foreground" : "text-muted-foreground/50"}>
-                {selectedValue || props.placeholder as string || "Select..."}
-              </span>
-              <svg className={`w-3 h-3 transition-transform ${isOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-            </div>
-            {isOpen && selectOptions.length > 0 && (
-              <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-card border border-border rounded shadow-lg overflow-hidden">
-                {selectOptions.map((opt, i) => (
-                  <div
-                    key={i}
-                    onClick={() => {
-                      setSelectValues((prev) => ({ ...prev, [element.key]: opt }));
-                      setOpenSelect(null);
-                    }}
-                    className={`px-2 py-1.5 text-xs text-left cursor-pointer hover:bg-muted transition-colors ${selectedValue === opt ? "bg-muted" : ""}`}
-                  >
-                    {opt}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      case "Checkbox":
-        return (
-          <label key={element.key} className={`flex items-center gap-2 text-xs ${baseClass} ${customClass}`}>
-            <div className={`w-3.5 h-3.5 border border-border rounded-sm ${props.checked ? "bg-foreground" : "bg-card"}`} />
-            {props.label as string}
-          </label>
-        );
-      case "Radio":
-        const options = (props.options as string[]) || [];
-        return (
-          <div key={element.key} className={`space-y-1 ${baseClass} ${customClass}`}>
-            {props.label ? <div className="text-[10px] text-muted-foreground mb-1 text-left">{props.label as string}</div> : null}
-            {options.map((opt, i) => (
-              <label key={i} className="flex items-center gap-2 text-xs">
-                <div className={`w-3.5 h-3.5 border border-border rounded-full ${i === 0 ? "bg-foreground" : "bg-card"}`} />
-                {opt}
-              </label>
-            ))}
-          </div>
-        );
-      case "Switch":
-        return (
-          <label key={element.key} className={`flex items-center justify-between gap-2 text-xs ${baseClass} ${customClass}`}>
-            <span>{props.label as string}</span>
-            <div className={`w-8 h-4 rounded-full relative ${props.checked ? "bg-foreground" : "bg-border"}`}>
-              <div className={`absolute w-3 h-3 rounded-full bg-background top-0.5 transition-all ${props.checked ? "right-0.5" : "left-0.5"}`} />
-            </div>
-          </label>
-        );
-
-      // Actions
-      case "Button":
-        const variant = props.variant as string;
-        const btnClass = variant === "danger" ? "bg-red-500 text-white" : variant === "secondary" ? "bg-card border border-border text-foreground" : "bg-foreground text-background";
-        return (
-          <button key={element.key} onClick={handleAction} className={`self-start px-3 py-1.5 rounded text-xs font-medium hover:opacity-90 transition-opacity ${btnClass} ${baseClass} ${customClass}`}>
-            {props.label as string}
-          </button>
-        );
-      case "Link":
-        return (
-          <span key={element.key} className={`text-xs text-blue-500 underline cursor-pointer ${baseClass} ${customClass}`}>
-            {props.label as string}
-          </span>
-        );
-
-      // Typography
-      case "Heading":
-        const level = (props.level as number) || 2;
-        const headingClass = level === 1 ? "text-lg font-bold" : level === 3 ? "text-xs font-semibold" : level === 4 ? "text-[10px] font-semibold" : "text-sm font-semibold";
-        return <div key={element.key} className={`${headingClass} text-left ${baseClass} ${customClass}`}>{props.text as string}</div>;
-      case "Text":
-        const textVariant = props.variant as string;
-        const textClass = textVariant === "caption" ? "text-[10px]" : textVariant === "muted" ? "text-xs text-muted-foreground" : "text-xs";
-        return <p key={element.key} className={`${textClass} text-left ${baseClass} ${customClass}`}>{props.content as string}</p>;
-
-      // Data Display
-      case "Image":
-        const hasCustomSize = customClass.includes("w-") || customClass.includes("h-");
-        const imgStyle = hasCustomSize ? {} : { width: (props.width as number) || 80, height: (props.height as number) || 60 };
-        return (
-          <div key={element.key} className={`bg-card border border-border rounded flex items-center justify-center text-[10px] text-muted-foreground aspect-video ${baseClass} ${customClass}`} style={imgStyle}>
-            {props.alt as string || "img"}
-          </div>
-        );
-      case "Avatar":
-        const name = props.name as string || "?";
-        const initials = name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
-        const avatarSize = props.size === "lg" ? "w-10 h-10 text-sm" : props.size === "sm" ? "w-6 h-6 text-[8px]" : "w-8 h-8 text-[10px]";
-        return (
-          <div key={element.key} className={`${avatarSize} rounded-full bg-muted flex items-center justify-center font-medium ${baseClass} ${customClass}`}>
-            {initials}
-          </div>
-        );
-      case "Badge":
-        const badgeVariant = props.variant as string;
-        const badgeClass = badgeVariant === "success" ? "bg-green-100 text-green-800" : badgeVariant === "warning" ? "bg-yellow-100 text-yellow-800" : badgeVariant === "danger" ? "bg-red-100 text-red-800" : "bg-muted text-foreground";
-        return <span key={element.key} className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${badgeClass} ${baseClass} ${customClass}`}>{props.text as string}</span>;
-      case "Alert":
-        const alertType = props.type as string;
-        const alertClass = alertType === "success" ? "bg-green-50 border-green-200" : alertType === "warning" ? "bg-yellow-50 border-yellow-200" : alertType === "error" ? "bg-red-50 border-red-200" : "bg-blue-50 border-blue-200";
-        return (
-          <div key={element.key} className={`p-2 rounded border ${alertClass} ${baseClass} ${customClass}`}>
-            <div className="text-xs font-medium">{props.title as string}</div>
-            {props.message ? <div className="text-[10px] mt-0.5">{props.message as string}</div> : null}
-          </div>
-        );
-      case "Progress":
-        const value = Math.min(100, Math.max(0, (props.value as number) || 0));
-        return (
-          <div key={element.key} className={`${baseClass} ${customClass}`}>
-            {props.label ? <div className="text-[10px] text-muted-foreground mb-1 text-left">{props.label as string}</div> : null}
-            <div className="h-2 bg-muted rounded-full overflow-hidden">
-              <div className="h-full bg-foreground rounded-full transition-all" style={{ width: `${value}%` }} />
-            </div>
-          </div>
-        );
-      case "Rating":
-        const ratingValue = (props.value as number) || 0;
-        const maxRating = (props.max as number) || 5;
-        return (
-          <div key={element.key} className={`${baseClass} ${customClass}`}>
-            {props.label ? <div className="text-[10px] text-muted-foreground mb-1 text-left">{props.label as string}</div> : null}
-            <div className="flex gap-0.5">
-              {Array.from({ length: maxRating }).map((_, i) => (
-                <span key={i} className={`text-sm ${i < ratingValue ? "text-yellow-400" : "text-muted"}`}>*</span>
-              ))}
-            </div>
-          </div>
-        );
-
-      // Fallback for Form type (legacy)
-      case "Form":
-        return (
-          <div key={element.key} className={`border border-border rounded-lg p-3 bg-background ${baseClass} ${customClass}`}>
-            {props.title ? <div className="font-semibold text-sm mb-2 text-left">{props.title as string}</div> : null}
-            <div className="space-y-2">{renderChildren()}</div>
-          </div>
-        );
-
-      default:
-        return <div key={element.key} className={`text-[10px] text-muted-foreground ${baseClass} ${customClass}`}>[{type}]</div>;
-    }
-  };
-
-  // Render preview from tree
-  const renderPreview = () => {
-    const currentTree = mode === "simulation" ? currentSimulationStage?.tree : tree;
-
-    if (!currentTree || !currentTree.root || !currentTree.elements[currentTree.root]) {
-      return <div className="h-full flex items-center justify-center text-muted-foreground/50 text-sm">{isLoading ? "generating..." : "waiting..."}</div>;
-    }
-
-    const root = currentTree.elements[currentTree.root];
-    if (!root) return null;
-
-    return (
-      <div className="animate-in fade-in duration-200 w-full flex flex-col items-center py-4">
-        <div className="my-auto">
-          {renderElement(root, currentTree.elements)}
-          {actionFired && (
-            <div className="mt-3 text-xs font-mono text-muted-foreground text-center animate-in fade-in slide-in-from-bottom-2">
-              onAction()
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  const currentTree = mode === "simulation" ? currentSimulationStage?.tree : tree;
   const jsonCode = currentTree ? JSON.stringify(currentTree, null, 2) : "// waiting...";
 
   const isTypingSimulation = mode === "simulation" && phase === "typing";
   const isStreamingSimulation = mode === "simulation" && phase === "streaming";
-  const showLoadingDots = isStreamingSimulation || isLoading;
+  const showLoadingDots = isStreamingSimulation || isStreaming;
 
   return (
     <div className="w-full max-w-4xl mx-auto">
@@ -534,13 +208,13 @@ export function Demo() {
                 onChange={(e) => setUserPrompt(e.target.value)}
                 placeholder="Describe what you want to build..."
                 className="flex-1 bg-transparent outline-none placeholder:text-muted-foreground/50"
-                disabled={isLoading}
+                disabled={isStreaming}
                 maxLength={140}
                 autoFocus
               />
             </form>
           )}
-          {(mode === "simulation" || isLoading) ? (
+          {(mode === "simulation" || isStreaming) ? (
             <button
               onClick={stopGeneration}
               className="ml-2 p-1 text-muted-foreground hover:text-foreground transition-colors"
@@ -632,11 +306,33 @@ export function Demo() {
           </div>
         </div>
 
-        {/* Rendered output */}
+        {/* Rendered output using json-render */}
         <div>
           <div className="text-xs text-muted-foreground mb-2 font-mono">render</div>
           <div className="border border-border rounded p-3 bg-card h-96 overflow-auto flex flex-col">
-            {renderPreview()}
+            {currentTree && currentTree.root ? (
+              <div className="animate-in fade-in duration-200 w-full flex flex-col items-center py-4">
+                <div className="my-auto">
+                  <JSONUIProvider registry={demoRegistry as Parameters<typeof JSONUIProvider>[0]['registry']}>
+                    <Renderer
+                      tree={currentTree}
+                      registry={demoRegistry as Parameters<typeof Renderer>[0]['registry']}
+                      loading={isStreaming || isStreamingSimulation}
+                      fallback={fallbackComponent as Parameters<typeof Renderer>[0]['fallback']}
+                    />
+                  </JSONUIProvider>
+                  {actionFired && (
+                    <div className="mt-3 text-xs font-mono text-muted-foreground text-center animate-in fade-in slide-in-from-bottom-2">
+                      onAction()
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="h-full flex items-center justify-center text-muted-foreground/50 text-sm">
+                {isStreaming ? "generating..." : "waiting..."}
+              </div>
+            )}
           </div>
         </div>
       </div>

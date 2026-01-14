@@ -13,15 +13,15 @@
     "ai": "^6.0.33",
     "@json-render/core": "workspace:*",
     "@json-render/react": "workspace:*",
-    "next": "^15.3.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "next": "16.1.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
+    "@types/react": "19.2.3",
+    "@types/react-dom": "19.2.3",
     "typescript": "^5.7.2"
   }
 }
