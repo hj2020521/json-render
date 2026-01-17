@@ -1,10 +1,5 @@
 import type { UITree } from "@json-render/core";
-import {
-  collectUsedComponents,
-  collectDataPaths,
-  traverseTree,
-  serializeProps,
-} from "@json-render/codegen";
+import { collectUsedComponents, serializeProps } from "@json-render/codegen";
 import { componentTemplates } from "./templates";
 
 export interface ExportedFile {
@@ -29,7 +24,6 @@ export function generateNextJSProject(
 
   // Collect what we need
   const usedComponents = collectUsedComponents(tree);
-  const dataPaths = collectDataPaths(tree);
 
   // 1. Generate package.json
   files.push({

@@ -9,11 +9,7 @@ import React, {
 } from "react";
 import { Renderer, useUIStream, JSONUIProvider } from "@json-render/react";
 import type { UITree } from "@json-render/core";
-import {
-  collectUsedComponents,
-  traverseTree,
-  serializeProps,
-} from "@json-render/codegen";
+import { collectUsedComponents, serializeProps } from "@json-render/codegen";
 import { toast } from "sonner";
 import { CodeBlock } from "./code-block";
 import { CopyButton } from "./copy-button";

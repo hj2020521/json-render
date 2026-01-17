@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   DataProvider,
   ActionProvider,
@@ -9,7 +9,7 @@ import {
   Renderer,
 } from "@json-render/react";
 import { componentRegistry } from "@/components/ui";
-import { generateNextJSProject, type ExportedFile } from "@/lib/codegen";
+import { generateNextJSProject } from "@/lib/codegen";
 import {
   CodeHighlight,
   getLanguageFromPath,
@@ -81,12 +81,16 @@ function DashboardContent() {
     onError: (err) => console.error("Generation error:", err),
   });
 
-  const exportedFiles = tree
-    ? generateNextJSProject(tree, {
-        projectName: "my-dashboard",
-        data: INITIAL_DATA,
-      })
-    : [];
+  const exportedFiles = useMemo(
+    () =>
+      tree
+        ? generateNextJSProject(tree, {
+            projectName: "my-dashboard",
+            data: INITIAL_DATA,
+          })
+        : [],
+    [tree],
+  );
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {

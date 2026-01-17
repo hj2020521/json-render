@@ -158,8 +158,8 @@ const propsStr = serializeProps({
 
       <h2 className="text-xl font-semibold mt-12 mb-4">Try It</h2>
       <p className="text-sm text-muted-foreground mb-4">
-        Run the dashboard example and click "Export Project" to see code
-        generation in action:
+        Run the dashboard example and click &quot;Export Project&quot; to see
+        code generation in action:
       </p>
       <Code lang="bash">{`cd examples/dashboard
 pnpm dev
