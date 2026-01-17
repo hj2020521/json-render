@@ -78,6 +78,7 @@ EXAMPLE (Blog with responsive grid):
 Generate JSONL:`;
 
 const MAX_PROMPT_LENGTH = 140;
+const DEFAULT_MODEL = "anthropic/claude-haiku-4.5";
 
 export async function POST(req: Request) {
   const { prompt } = await req.json();
@@ -85,7 +86,7 @@ export async function POST(req: Request) {
   const sanitizedPrompt = String(prompt || "").slice(0, MAX_PROMPT_LENGTH);
 
   const result = streamText({
-    model: "anthropic/claude-opus-4.5",
+    model: process.env.AI_MODEL || DEFAULT_MODEL,
     system: SYSTEM_PROMPT,
     prompt: sanitizedPrompt,
     temperature: 0.7,

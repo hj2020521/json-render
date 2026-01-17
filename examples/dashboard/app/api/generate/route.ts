@@ -58,6 +58,8 @@ EXAMPLE - Revenue Dashboard:
 
 Generate JSONL patches now:`;
 
+const DEFAULT_MODEL = "anthropic/claude-haiku-4.5";
+
 export async function POST(req: Request) {
   const { prompt, context } = await req.json();
 
@@ -69,7 +71,7 @@ export async function POST(req: Request) {
   }
 
   const result = streamText({
-    model: "anthropic/claude-opus-4.5",
+    model: process.env.AI_MODEL || DEFAULT_MODEL,
     system: SYSTEM_PROMPT,
     prompt: fullPrompt,
     temperature: 0.7,
