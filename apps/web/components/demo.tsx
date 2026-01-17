@@ -866,10 +866,11 @@ Open [http://localhost:3000](http://localhost:3000) to view.
     return files;
   }, [currentTree]);
 
-  // Reset collapsed folders when export modal closes
+  // Reset state when export modal closes
   useEffect(() => {
     if (!showExportModal) {
       setCollapsedFolders(new Set());
+      setSelectedExportFile(null);
     }
   }, [showExportModal]);
 
